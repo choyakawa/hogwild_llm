@@ -132,12 +132,12 @@ void hogwild_rope_tpl(
     TORCH_CHECK_EQ(cosines.size(0), F);
     TORCH_CHECK_EQ(cosines.size(1), W);
     TORCH_CHECK_EQ(cosines.size(2), S);
-    TORCH_CHECK_EQ(sines.size(3), RotaryE);
+    TORCH_CHECK_EQ(cosines.size(3), RotaryE);
 
     TORCH_CHECK_EQ(sines.size(0), F);
     TORCH_CHECK_EQ(sines.size(1), W);
     TORCH_CHECK_EQ(sines.size(2), S);
-    TORCH_CHECK_EQ(sines.size(3), E);
+    TORCH_CHECK_EQ(sines.size(3), RotaryE);
 
     rope_gpu(torch_get_pointer<scalar_t>(out), torch_get_pointer<scalar_t>(queries),
              torch_get_pointer<float>(cosines), torch_get_pointer<float>(sines),
