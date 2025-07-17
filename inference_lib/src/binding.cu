@@ -118,6 +118,7 @@ void hogwild_rope_tpl(
     int Hq = out.size(2);
     int S = out.size(3);
     int E = out.size(4);
+    int RotaryE = cosines.size(3);
     TORCH_CHECK(out.is_contiguous());
     TORCH_CHECK(queries.is_contiguous());
     TORCH_CHECK(cosines.is_contiguous());
@@ -126,12 +127,12 @@ void hogwild_rope_tpl(
     TORCH_CHECK_EQ(queries.size(0), W);
     TORCH_CHECK_EQ(queries.size(1), Hq);
     TORCH_CHECK_EQ(queries.size(2), S);
-    TORCH_CHECK_EQ(queries.size(3), E);
+    TORCH_CHECK_EQ(cosines.size(3), RotaryE);
 
     TORCH_CHECK_EQ(cosines.size(0), F);
     TORCH_CHECK_EQ(cosines.size(1), W);
     TORCH_CHECK_EQ(cosines.size(2), S);
-    TORCH_CHECK_EQ(cosines.size(3), E);
+    TORCH_CHECK_EQ(sines.size(3), RotaryE);
 
     TORCH_CHECK_EQ(sines.size(0), F);
     TORCH_CHECK_EQ(sines.size(1), W);
@@ -140,7 +141,7 @@ void hogwild_rope_tpl(
 
     rope_gpu(torch_get_pointer<scalar_t>(out), torch_get_pointer<scalar_t>(queries),
              torch_get_pointer<float>(cosines), torch_get_pointer<float>(sines),
-                     F, W, Hq, S, E);
+                     F, W, Hq, S, E, RotaryE);
     C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 

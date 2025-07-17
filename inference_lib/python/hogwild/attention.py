@@ -84,7 +84,10 @@ def rotate_half(x):
 def apply_rotary_pos_emb(x, cos, sin, unsqueeze_dim=1):
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
-    return ((x * cos) + (rotate_half(x) * sin)).to(x.dtype)
+    rotary_dim = cos.shape[-1]
+    x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+    x_rot_emb = (x_rot * cos) + (rotate_half(x_rot) * sin)
+    return torch.cat((x_rot_emb, x_pass), dim=-1).to(x.dtype)
 
 
 #############################################################################
@@ -311,7 +314,7 @@ class AttentionModule(nn.Module):
         # queries will be rotated for individual segments, so nothing to do here
         key_states = apply_rotary_pos_emb(key_states, cos, sin)
 
-        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position, 'mask': attention_mask}
+        cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position, "mask": attention_mask}
         cache: CacheStructure = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         if self.config._attn_implementation == "eager":

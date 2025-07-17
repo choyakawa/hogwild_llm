@@ -20,13 +20,14 @@ int main() {
     int Hq = 40;
     int S = 1;
     int E = 128;
+    int RotaryE = 128;
 
     std::vector<float> queries = random_vector(W * Hq * S * E, 42);
     std::vector<float> expected(F*W*Hq*S*E);
     std::vector<float> cosines = random_vector(F * W * S * E, 453);
     std::vector<float> sines = random_vector(F * W * S * E, 837);
 
-    rope_cpu(expected.data(), queries.data(), cosines.data(), sines.data(), F, W, Hq, S, E);
+    rope_cpu(expected.data(), queries.data(), cosines.data(), sines.data(), F, W, Hq, S, E, RotaryE);
 
     // GPU version
     float* d_queries;
@@ -41,7 +42,7 @@ int main() {
     CUDA_CHECK_THROW(cudaMalloc(&d_sines, sines.size()*sizeof(float)));
     CUDA_CHECK_THROW(cudaMemcpy(d_sines, sines.data(), sines.size()*sizeof(float), cudaMemcpyHostToDevice));
 
-    rope_gpu(d_result, d_queries, d_cosines, d_sines, F, W, Hq, S, E);
+    rope_gpu(d_result, d_queries, d_cosines, d_sines, F, W, Hq, S, E, RotaryE);
     CUDA_CHECK_THROW(cudaGetLastError());
 
     std::vector<float> result(expected.size());
