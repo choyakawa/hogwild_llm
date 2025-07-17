@@ -127,7 +127,7 @@ void hogwild_rope_tpl(
     TORCH_CHECK_EQ(queries.size(0), W);
     TORCH_CHECK_EQ(queries.size(1), Hq);
     TORCH_CHECK_EQ(queries.size(2), S);
-    TORCH_CHECK_EQ(cosines.size(3), RotaryE);
+    TORCH_CHECK_EQ(queries.size(3), E);
 
     TORCH_CHECK_EQ(cosines.size(0), F);
     TORCH_CHECK_EQ(cosines.size(1), W);
