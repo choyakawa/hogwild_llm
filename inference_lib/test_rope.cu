@@ -20,12 +20,12 @@ int main() {
     int Hq = 40;
     int S = 1;
     int E = 128;
-    int RotaryE = 128;
+    int RotaryE = 64; // Test partial rotation
 
     std::vector<float> queries = random_vector(W * Hq * S * E, 42);
     std::vector<float> expected(F*W*Hq*S*E);
-    std::vector<float> cosines = random_vector(F * W * S * E, 453);
-    std::vector<float> sines = random_vector(F * W * S * E, 837);
+    std::vector<float> cosines = random_vector(F * W * S * RotaryE, 453);
+    std::vector<float> sines = random_vector(F * W * S * RotaryE, 837);
 
     rope_cpu(expected.data(), queries.data(), cosines.data(), sines.data(), F, W, Hq, S, E, RotaryE);
 

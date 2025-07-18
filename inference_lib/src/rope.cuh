@@ -11,21 +11,43 @@ __global__ void rope_kernel(
 
     const scalar_t* query = queries + ((w * Hq + h) * S + s) * E;
     scalar_t* result = rotated_queries + (((f * W + w) * Hq + h) * S + s) * E;
+
+    // Each thread handles one element in the E dimension.
     int e = threadIdx.x;
 
-    if (e < RotaryE / 2) {
-        float x1 = query[e];
-        float x2 = query[e + RotaryE / 2];
+    if (e < RotaryE) {
+        // This thread is in the part that needs to be rotated.
+        int e_pair;
+        float x1, x2;
+        int cos_sin_idx;
 
-        // fetch a tuple of activations, which we imagine as a complex number
+        if (e < RotaryE / 2) {
+            // First element of a pair.
+            e_pair = e + RotaryE / 2;
+            x1 = query[e];
+            x2 = query[e_pair];
+            cos_sin_idx = e;
+        } else {
+            // Second element of a pair.
+            e_pair = e - RotaryE / 2;
+            x1 = query[e_pair];
+            x2 = query[e];
+            cos_sin_idx = e_pair;
+        }
+
         int offset = (((f*W + w) * S + s) * RotaryE);
+        const float* cos_vec = cosines + offset;
+        const float* sin_vec = sines + offset;
 
-        result[e] = x1 * cosines[offset + e] - x2 * sines[offset + e];
-        result[e + RotaryE / 2] = x2 * cosines[offset + e + RotaryE / 2] + x1 * sines[offset + e + RotaryE / 2];
-    } else { // This thread handles a pair of non-rotated dimensions
-        // e is in [RotaryE/2, E/2)
+        if (e < RotaryE / 2) {
+            result[e] = x1 * cos_vec[cos_sin_idx] - x2 * sin_vec[cos_sin_idx];
+        } else {
+            result[e] = x2 * cos_vec[cos_sin_idx] + x1 * sin_vec[cos_sin_idx];
+        }
+
+    } else {
+        // This thread is in the pass-through part. Simple copy.
         result[e] = query[e];
-        result[e + E/2] = query[e + E/2];
     }
 }
 
@@ -34,6 +56,7 @@ void rope_gpu(
         scalar_t* rotated_queries, const scalar_t* queries, const float* cosines, const float* sines,
         int F, int W, int Hq, int S, int E, int RotaryE) {
     dim3 grid_dim(F*S , Hq, W);
-    dim3 block_dim(E/2, 1, 1);
+    // Launch E threads per query vector.
+    dim3 block_dim(E, 1, 1);
     rope_kernel<<<grid_dim, block_dim>>>(rotated_queries, queries, cosines, sines, F, W, Hq, S, E, RotaryE);
 }
