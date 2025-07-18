@@ -8,6 +8,27 @@ import numpy as np
 torch.ops.load_library("libhogatt.so")
 
 
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2:]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(x, cos, sin, unsqueeze_dim=2):
+    """
+    Applies rotary position embedding to the input tensor.
+    Only the first `cos.shape[-1]` dimensions are rotated.
+    """
+    # unsqueeze_dim=2 to broadcast over Hq dimension in queries of shape (F, W, Hq, S, E)
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    rotary_dim = cos.shape[-1]
+    x_rot, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+    x_rot_emb = (x_rot * cos) + (rotate_half(x_rot) * sin)
+    return torch.cat((x_rot_emb, x_pass), dim=-1).to(x.dtype)
+
+
 def hogwild_sdpa_ref(queries: torch.Tensor, locations: torch.Tensor, keys: list[torch.Tensor], values: list[torch.Tensor],
                      scale: float) -> torch.Tensor:
     qk = []
@@ -46,7 +67,7 @@ def hogwild_sdpa(queries: torch.Tensor, locations: torch.Tensor, keys: list[torc
 
 
 @torch.no_grad()
-def test_custom_kernel(F: int, W: int, Hq: int, Hkv: int, E: int, Ev: int, S: int, # noqa
+def test_custom_kernel(F: int, W: int, Hq: int, Hkv: int, E: int, RotaryE: int, Ev: int, S: int, # noqa
                        frags: list[int], scale: float = None):
     # TODO make input distributions more interesting
     torch.random.manual_seed(42)
@@ -55,17 +76,27 @@ def test_custom_kernel(F: int, W: int, Hq: int, Hkv: int, E: int, Ev: int, S: in
     queries = torch.rand((F, W, Hq, S, E))
     keys = [torch.rand((Hkv, f, E)) for f in frags]
     values = [torch.rand((Hkv, f, Ev)) for f in frags]
-    frags = torch.tensor(frags, dtype=torch.int32)
-    locations = torch.arange(0, S)[None, None, :] + (frags[:, None, None] - S)
+    frags_tensor = torch.tensor(frags, dtype=torch.int32)
+    locations = torch.arange(0, S)[None, None, :] + (frags_tensor[:, None, None] - S)
     locations = torch.tile(locations, (1, W, 1)).to(torch.int32)
 
-    expected = hogwild_sdpa_ref(queries, locations, keys, values, scale=scale)
-    keys = [k[None, ...].to("cuda") for k in keys]
-    values = [k[None, ...].to("cuda") for k in values]
-    actual = hogwild_sdpa(queries.to("cuda"), locations.to("cuda"), keys, values, scale=scale)
+    cos = torch.rand((F, W, S, RotaryE))
+    sin = torch.rand((F, W, S, RotaryE))
+    rotated_queries = apply_rotary_pos_emb(queries, cos, sin)
+
+    expected = hogwild_sdpa_ref(rotated_queries, locations, keys, values, scale=scale)
+
+    keys_cuda = [k[None, ...].to("cuda") for k in keys]
+    values_cuda = [v[None, ...].to("cuda") for v in values]
+    actual = hogwild_sdpa(rotated_queries.to("cuda"), locations.to("cuda"), keys_cuda, values_cuda, scale=scale)
+
+    print("Expected result:")
     print(expected)
+    print("\nDifference (Expected - Actual):")
     print(expected.cpu() - actual.cpu())
 
+    torch.testing.assert_close(actual.cpu(), expected, rtol=1e-5, atol=1e-5)
+    print("\nTest passed!")
 
-#test_custom_kernel(4, 2, 40, 8, 128, 128, 2, [200, 10, 15, 10])
-test_custom_kernel(1, 1, 1, 1, 128, 128, 1, [100])
+
+test_custom_kernel(F=1, W=1, Hq=5, Hkv=1, E=128, RotaryE=64, Ev=128, S=1, frags=[100])
