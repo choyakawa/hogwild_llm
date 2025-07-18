@@ -268,11 +268,14 @@ __global__ __launch_bounds__(256) void hogwild_attention_gpu_kernel21(
     }
     __syncthreads();
 
-    // Let each warp handle multiple GQA groups if GQA > num_warps.
-    // warp.meta_group_rank() is the warp's ID within the block [0, 7]
-    // warp.meta_group_size() is the number of warps in the block (8)
-    for (int gqa = warp.meta_group_rank(); gqa < GQA; gqa += warp.meta_group_size())
-    {
+    // Let all warps in the block collaborate to reduce all GQA groups.
+    // Each warp (ID 0-7 for a 256-thread block) will handle a different GQA group in each iteration of the loop.
+    for (int gqa_offset = 0; gqa_offset < GQA; gqa_offset += (blockDim.x / WarpSize)) {
+        int gqa = warp.meta_group_rank() + gqa_offset;
+        if (gqa >= GQA) {
+            continue;
+        }
+
         int h = hkv * GQA + gqa;
         int res_base = ((w * Hq + h) * S + s);
         int res_inc = W * Hq * S;
@@ -286,7 +289,7 @@ __global__ __launch_bounds__(256) void hogwild_attention_gpu_kernel21(
         own_lse = std::log2(own_lse) + l2scale * own_max;
 
         for (int e = vec_t::size * warp.thread_rank(); e < Ev; e += vec_t::size * warp.size()) {
-            // merge the local results from all warps for the current GQA group
+            // merge the local results
             fvec_t res = fvec_t::zeros();
             for (int j = 0; j < SubWarpMetaSize / (WarpSize / SubWarpSize); ++j) {
                 fvec_t sv = fvec_t::load(scratch + e + Ev * j + gqa * 256 / WarpSize * Ev);
@@ -390,16 +393,6 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
         CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 16, scalar_t>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
         hogwild_attention_gpu_kernel21<128, 128, 16><<<grid_dim, block_dim, smem>>>(
-                out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
-
-        dim3 r_grid_dim{(unsigned)shape.Hq, (unsigned)shape.W * (unsigned)shape.S, 1};
-        hogwild_attention_reduce_kernel<128><<<r_grid_dim, 32>>>(
-                out, (float*)workspace, (float*)workspace + splits * shape.W * shape.Hq * shape.S * shape.Ev,
-                splits, shape);
-    } else if (shape.E == 128 && shape.Ev == 128 && shape.Hq == shape.Hkv * 5) {
-        CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 5, scalar_t>,
-                             cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
-        hogwild_attention_gpu_kernel21<128, 128, 5><<<grid_dim, block_dim, smem>>>(
                 out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
 
         dim3 r_grid_dim{(unsigned)shape.Hq, (unsigned)shape.W * (unsigned)shape.S, 1};
