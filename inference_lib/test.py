@@ -99,4 +99,4 @@ def test_custom_kernel(F: int, W: int, Hq: int, Hkv: int, E: int, RotaryE: int, 
     print("\nTest passed!")
 
 
-test_custom_kernel(F=1, W=1, Hq=5, Hkv=1, E=128, RotaryE=64, Ev=128, S=1, frags=[100])
+test_custom_kernel(F=1, W=1, Hq=16, Hkv=1, E=128, RotaryE=64, Ev=128, S=1, frags=[100])

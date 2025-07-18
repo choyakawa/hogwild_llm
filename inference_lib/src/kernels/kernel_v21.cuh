@@ -268,33 +268,37 @@ __global__ __launch_bounds__(256) void hogwild_attention_gpu_kernel21(
     }
     __syncthreads();
 
-    int gqa = warp.meta_group_rank();
-    if (gqa >= GQA) return;
-    int h = hkv * GQA + gqa;
-    int res_base = ((w * Hq + h) * S + s);
-    int res_inc = W * Hq * S;
-    int res_idx = res_base + split * res_inc;
-    float* global_accumulator = reinterpret_cast<float*>(workspace);
-    float* lse_target = global_accumulator + W * Hq * S * Ev * splits;
+    // Let each warp handle multiple GQA groups if GQA > num_warps.
+    // warp.meta_group_rank() is the warp's ID within the block [0, 7]
+    // warp.meta_group_size() is the number of warps in the block (8)
+    for (int gqa = warp.meta_group_rank(); gqa < GQA; gqa += warp.meta_group_size())
+    {
+        int h = hkv * GQA + gqa;
+        int res_base = ((w * Hq + h) * S + s);
+        int res_inc = W * Hq * S;
+        int res_idx = res_base + split * res_inc;
+        float* global_accumulator = reinterpret_cast<float*>(workspace);
+        float* lse_target = global_accumulator + W * Hq * S * Ev * splits;
 
-    stats_t data = stats_t::load(scratch + GQA * 256 / WarpSize * Ev + gqa * 2);
-    float own_lse = data[1];
-    float own_max = data[0];
-    own_lse = std::log2(own_lse) + l2scale * own_max;
+        stats_t data = stats_t::load(scratch + GQA * 256 / WarpSize * Ev + gqa * 2);
+        float own_lse = data[1];
+        float own_max = data[0];
+        own_lse = std::log2(own_lse) + l2scale * own_max;
 
-    for (int e = vec_t::size * warp.thread_rank(); e < Ev; e += vec_t::size * warp.size()) {
-        // merge the local results
-        fvec_t res = fvec_t::zeros();
-        for (int j = 0; j < SubWarpMetaSize / (WarpSize / SubWarpSize); ++j) {
-            fvec_t sv = fvec_t::load(scratch + e + Ev * j + gqa * 256 / WarpSize * Ev);
-            for (int jj = 0; jj < vec_t::size; ++jj) {
-                res[jj] += sv[jj];
+        for (int e = vec_t::size * warp.thread_rank(); e < Ev; e += vec_t::size * warp.size()) {
+            // merge the local results from all warps for the current GQA group
+            fvec_t res = fvec_t::zeros();
+            for (int j = 0; j < SubWarpMetaSize / (WarpSize / SubWarpSize); ++j) {
+                fvec_t sv = fvec_t::load(scratch + e + Ev * j + gqa * 256 / WarpSize * Ev);
+                for (int jj = 0; jj < vec_t::size; ++jj) {
+                    res[jj] += sv[jj];
+                }
             }
+            res.store(global_accumulator + res_idx * Ev + e);
         }
-        res.store(global_accumulator + res_idx * Ev + e);
-    }
 
-    lse_target[res_idx] = own_lse;
+        lse_target[res_idx] = own_lse;
+    }
 }
 
 
@@ -382,7 +386,17 @@ cudaError_t hogwild_attention_gpu(scalar_t* out, float scale,
         workspace_size = required_workspace;
     }
 
-    if (shape.E == 128 && shape.Ev == 128 && shape.Hq == shape.Hkv * 5) {
+    if (shape.E == 128 && shape.Ev == 128 && shape.Hq == shape.Hkv * 16) {
+        CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 16, scalar_t>,
+                             cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
+        hogwild_attention_gpu_kernel21<128, 128, 16><<<grid_dim, block_dim, smem>>>(
+                out, workspace, scale, locations, queries, fragment_lengths, key_fragments, value_fragments, shape);
+
+        dim3 r_grid_dim{(unsigned)shape.Hq, (unsigned)shape.W * (unsigned)shape.S, 1};
+        hogwild_attention_reduce_kernel<128><<<r_grid_dim, 32>>>(
+                out, (float*)workspace, (float*)workspace + splits * shape.W * shape.Hq * shape.S * shape.Ev,
+                splits, shape);
+    } else if (shape.E == 128 && shape.Ev == 128 && shape.Hq == shape.Hkv * 5) {
         CUDA_RETURN_ON_ERROR(cudaFuncSetAttribute(hogwild_attention_gpu_kernel21<128, 128, 5, scalar_t>,
                              cudaFuncAttributeMaxDynamicSharedMemorySize, smem));
         hogwild_attention_gpu_kernel21<128, 128, 5><<<grid_dim, block_dim, smem>>>(
